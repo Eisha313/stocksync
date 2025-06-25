@@ -1,0 +1,33 @@
+{
+	"name": "stocksync",
+	"version": "1.0.0",
+	"description": "A lightweight inventory alert system for small e-commerce businesses",
+	"private": true,
+	"scripts": {
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start",
+		"lint": "next lint"
+	},
+	"dependencies": {
+		"next": "^14.1.0",
+		"react": "^18.2.0",
+		"react-dom": "^18.2.0",
+		"mongodb": "^6.3.0",
+		"mongoose": "^8.1.0",
+		"stripe": "^14.14.0",
+		"@stripe/stripe-js": "^2.4.0",
+		"lucide-react": "^0.316.0"
+	},
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"@types/react": "^18.2.48",
+		"@types/react-dom": "^18.2.18",
+		"typescript": "^5.3.3",
+		"tailwindcss": "^3.4.1",
+		"postcss": "^8.4.33",
+		"autoprefixer": "^10.4.17",
+		"eslint": "^8.56.0",
+		"eslint-config-next": "^14.1.0"
+	}
+}
