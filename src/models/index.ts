@@ -1,1 +1,3 @@
-export { ProductModel } from './Product';
+export * from './Product';
+export * from './Alert';
+export * from './User';
