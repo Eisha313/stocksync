@@ -1,46 +1,66 @@
-import { AlertType } from '@/models/Alert';
-
 export const APP_NAME = 'StockSync';
 export const APP_DESCRIPTION = 'A lightweight inventory alert system';
 
-export const MONGODB_DATABASE = 'stocksync';
+export const INVENTORY_THRESHOLDS = {
+  LOW_STOCK_DEFAULT: 10,
+  CRITICAL_STOCK_DEFAULT: 5,
+  OUT_OF_STOCK: 0,
+} as const;
 
-export const COLLECTIONS = {
+export const ALERT_TYPES = {
+  LOW_STOCK: 'low_stock',
+  OUT_OF_STOCK: 'out_of_stock',
+  REORDER: 'reorder',
+} as const;
+
+export const ALERT_STATUS = {
+  PENDING: 'pending',
+  SENT: 'sent',
+  ACKNOWLEDGED: 'acknowledged',
+  RESOLVED: 'resolved',
+} as const;
+
+export const SUBSCRIPTION_TIERS = {
+  FREE: 'free',
+  PREMIUM: 'premium',
+} as const;
+
+export const PREMIUM_FEATURES = {
+  SMS_NOTIFICATIONS: 'sms_notifications',
+  ADVANCED_ANALYTICS: 'advanced_analytics',
+  PRIORITY_SUPPORT: 'priority_support',
+  UNLIMITED_PRODUCTS: 'unlimited_products',
+} as const;
+
+export const FREE_TIER_LIMITS = {
+  MAX_PRODUCTS: 50,
+  MAX_ALERTS_PER_DAY: 10,
+} as const;
+
+export const NOTIFICATION_CHANNELS = {
+  EMAIL: 'email',
+  SMS: 'sms',
+  PUSH: 'push',
+} as const;
+
+export const NOTIFICATION_PRIORITIES = {
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+  CRITICAL: 4,
+} as const;
+
+export const API_ROUTES = {
+  PRODUCTS: '/api/products',
+  ALERTS: '/api/alerts',
+  USERS: '/api/users',
+  PAYMENTS: '/api/payments',
+  WEBHOOKS: '/api/webhooks',
+} as const;
+
+export const MONGODB_COLLECTIONS = {
   PRODUCTS: 'products',
   ALERTS: 'alerts',
   USERS: 'users',
   PAYMENTS: 'payments',
-} as const;
-
-export const ALERT_TYPES: AlertType[] = ['email', 'sms', 'push'];
-
-export const PREMIUM_ALERT_TYPES: AlertType[] = ['sms', 'push'];
-
-export const VALIDATION = {
-  MIN_PRICE: 0,
-  MAX_PRICE: 1000000,
-  MIN_STOCK: 0,
-  MAX_STOCK: 1000000,
-  MIN_SKU_LENGTH: 3,
-  MAX_SKU_LENGTH: 50,
-  MIN_NAME_LENGTH: 1,
-  MAX_NAME_LENGTH: 200,
-  MIN_THRESHOLD: 1,
-  MAX_THRESHOLD: 10000,
-} as const;
-
-export const PAGINATION = {
-  DEFAULT_PAGE: 1,
-  DEFAULT_LIMIT: 20,
-  MAX_LIMIT: 100,
-} as const;
-
-export const HTTP_STATUS = {
-  OK: 200,
-  CREATED: 201,
-  BAD_REQUEST: 400,
-  UNAUTHORIZED: 401,
-  FORBIDDEN: 403,
-  NOT_FOUND: 404,
-  INTERNAL_ERROR: 500,
 } as const;
