@@ -1,105 +1,65 @@
-import { ObjectId, Filter, UpdateFilter } from 'mongodb';
+import { ObjectId, Collection } from 'mongodb';
 import { BaseRepository } from './base';
-import { User, SubscriptionTier } from '@/types';
+import { User } from '@/types';
 import { COLLECTIONS } from '../collections';
 
 export class UserRepository extends BaseRepository<User> {
-  constructor() {
-    super(COLLECTIONS.USERS);
+  protected getCollectionName(): string {
+    return COLLECTIONS.USERS;
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return this.findOne({ email: email.toLowerCase() } as Filter<User>);
+    const collection = await this.getCollection();
+    return collection.findOne({ email }) as Promise<User | null>;
   }
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<User | null> {
-    return this.findOne({ stripeCustomerId } as Filter<User>);
-  }
-
-  async createUser(data: {
-    email: string;
-    name: string;
-    passwordHash?: string;
-  }): Promise<User> {
-    const now = new Date();
-    const userData: Omit<User, '_id'> = {
-      email: data.email.toLowerCase(),
-      name: data.name,
-      passwordHash: data.passwordHash,
-      subscription: {
-        tier: SubscriptionTier.FREE,
-        features: {
-          maxProducts: 10,
-          maxAlerts: 5,
-          smsNotifications: false,
-          emailNotifications: true,
-          webhookIntegrations: false,
-        },
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-    return this.create(userData);
-  }
-
-  async updateStripeCustomerId(id: string, stripeCustomerId: string): Promise<User | null> {
-    return this.updateOne(id, {
-      $set: {
-        stripeCustomerId,
-        updatedAt: new Date(),
-      },
-    } as UpdateFilter<User>);
-  }
-
-  async upgradeToPremium(id: string, paymentId: string): Promise<User | null> {
-    return this.updateOne(id, {
-      $set: {
-        'subscription.tier': SubscriptionTier.PREMIUM,
-        'subscription.paymentId': paymentId,
-        'subscription.activatedAt': new Date(),
-        'subscription.features': {
-          maxProducts: 100,
-          maxAlerts: 50,
-          smsNotifications: true,
-          emailNotifications: true,
-          webhookIntegrations: true,
-        },
-        updatedAt: new Date(),
-      },
-    } as UpdateFilter<User>);
-  }
-
-  async updateNotificationPreferences(
-    id: string,
-    preferences: User['notificationPreferences']
-  ): Promise<User | null> {
-    return this.updateOne(id, {
-      $set: {
-        notificationPreferences: preferences,
-        updatedAt: new Date(),
-      },
-    } as UpdateFilter<User>);
-  }
-
-  async updatePhoneNumber(id: string, phoneNumber: string): Promise<User | null> {
-    return this.updateOne(id, {
-      $set: {
-        phoneNumber,
-        updatedAt: new Date(),
-      },
-    } as UpdateFilter<User>);
+    const collection = await this.getCollection();
+    return collection.findOne({ stripeCustomerId }) as Promise<User | null>;
   }
 
   async findPremiumUsers(): Promise<User[]> {
-    return this.findMany({
-      'subscription.tier': SubscriptionTier.PREMIUM,
-    } as Filter<User>);
+    const collection = await this.getCollection();
+    return collection.find({ isPremium: true }).toArray() as Promise<User[]>;
   }
 
-  async emailExists(email: string): Promise<boolean> {
-    const user = await this.findByEmail(email);
-    return user !== null;
+  async updateAlertPreferences(
+    userId: string,
+    preferences: User['alertPreferences']
+  ): Promise<User | null> {
+    return this.update(userId, { alertPreferences: preferences });
+  }
+
+  async upgradeToPremium(
+    userId: string,
+    features: string[]
+  ): Promise<User | null> {
+    return this.update(userId, {
+      isPremium: true,
+      premiumFeatures: features,
+      paymentStatus: 'completed',
+    });
+  }
+
+  async downgradeToPremium(userId: string): Promise<User | null> {
+    return this.update(userId, {
+      isPremium: false,
+      premiumFeatures: [],
+      paymentStatus: 'pending',
+    });
+  }
+
+  async getUsersWithSmsEnabled(): Promise<User[]> {
+    const collection = await this.getCollection();
+    return collection.find({
+      isPremium: true,
+      premiumFeatures: { $in: ['sms_notifications'] },
+      'alertPreferences.smsEnabled': true,
+    }).toArray() as Promise<User[]>;
+  }
+
+  async findByPhoneNumber(phoneNumber: string): Promise<User | null> {
+    const collection = await this.getCollection();
+    return collection.findOne({ phoneNumber }) as Promise<User | null>;
   }
 }
-
-export const userRepository = new UserRepository();
