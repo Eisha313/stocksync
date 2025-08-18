@@ -1,2 +1,3 @@
-export { ProductController } from './product.controller';
-export { AlertController } from './alert.controller';
+export { ProductController, productController } from './product.controller';
+export { AlertController, alertController } from './alert.controller';
+export { PaymentController, paymentController } from './payment.controller';

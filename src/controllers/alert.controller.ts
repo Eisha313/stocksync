@@ -1,137 +1,177 @@
 import { NextRequest } from 'next/server';
 import { AlertRepository } from '@/lib/db/repositories';
+import { ApiResponse } from '@/lib/api/response';
 import { validateAlert, validateAlertUpdate } from '@/lib/validators/alert';
-import { successResponse, errorResponse, notFoundResponse, validationErrorResponse } from '@/lib/api/response';
-import { ObjectId } from 'mongodb';
-import { AlertStatus } from '@/types';
+import { AlertStatus, AlertType } from '@/types';
 
 export class AlertController {
-  static async getAll(request: NextRequest) {
+  private alertRepository: AlertRepository;
+
+  constructor() {
+    this.alertRepository = new AlertRepository();
+  }
+
+  async getAll(request: NextRequest) {
     try {
       const { searchParams } = new URL(request.url);
       const userId = searchParams.get('userId');
       const status = searchParams.get('status') as AlertStatus | null;
-      const unacknowledged = searchParams.get('unacknowledged');
+      const type = searchParams.get('type') as AlertType | null;
+      const unacknowledged = searchParams.get('unacknowledged') === 'true';
+
+      if (!userId) {
+        return ApiResponse.badRequest('userId is required');
+      }
 
       let alerts;
 
-      if (unacknowledged === 'true' && userId) {
-        alerts = await AlertRepository.findUnacknowledged(userId);
-      } else if (userId && status) {
-        alerts = await AlertRepository.findByUserAndStatus(userId, status);
-      } else if (userId) {
-        alerts = await AlertRepository.findByUserId(userId);
+      if (unacknowledged) {
+        alerts = await this.alertRepository.findUnacknowledged(userId);
+      } else if (status) {
+        alerts = await this.alertRepository.findByStatus(userId, status);
+      } else if (type) {
+        alerts = await this.alertRepository.findByType(userId, type);
       } else {
-        alerts = await AlertRepository.findAll();
+        alerts = await this.alertRepository.findByUserId(userId);
       }
 
-      return successResponse(alerts);
+      return ApiResponse.success(alerts);
     } catch (error) {
       console.error('Error fetching alerts:', error);
-      return errorResponse('Failed to fetch alerts');
+      return ApiResponse.error('Failed to fetch alerts');
     }
   }
 
-  static async create(request: NextRequest) {
+  async create(request: NextRequest) {
     try {
       const body = await request.json();
       const validation = validateAlert(body);
 
       if (!validation.success) {
-        return validationErrorResponse(validation.error.errors);
+        return ApiResponse.badRequest(validation.error.errors[0].message);
       }
 
-      const alert = await AlertRepository.create(validation.data);
-      return successResponse(alert, 201);
+      const alert = await this.alertRepository.create(validation.data);
+      return ApiResponse.created(alert);
     } catch (error) {
       console.error('Error creating alert:', error);
-      return errorResponse('Failed to create alert');
+      return ApiResponse.error('Failed to create alert');
     }
   }
 
-  static async getById(id: string) {
+  async getById(id: string) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid alert ID format' }]);
-      }
-
-      const alert = await AlertRepository.findById(id);
+      const alert = await this.alertRepository.findById(id);
 
       if (!alert) {
-        return notFoundResponse('Alert not found');
+        return ApiResponse.notFound('Alert not found');
       }
 
-      return successResponse(alert);
+      return ApiResponse.success(alert);
     } catch (error) {
       console.error('Error fetching alert:', error);
-      return errorResponse('Failed to fetch alert');
+      return ApiResponse.error('Failed to fetch alert');
     }
   }
 
-  static async update(id: string, request: NextRequest) {
+  async update(id: string, request: NextRequest) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid alert ID format' }]);
-      }
-
       const body = await request.json();
       const validation = validateAlertUpdate(body);
 
       if (!validation.success) {
-        return validationErrorResponse(validation.error.errors);
+        return ApiResponse.badRequest(validation.error.errors[0].message);
       }
 
-      const alert = await AlertRepository.update(id, {
-        ...validation.data,
-        updatedAt: new Date(),
-      });
+      const alert = await this.alertRepository.update(id, validation.data);
 
       if (!alert) {
-        return notFoundResponse('Alert not found');
+        return ApiResponse.notFound('Alert not found');
       }
 
-      return successResponse(alert);
+      return ApiResponse.success(alert);
     } catch (error) {
       console.error('Error updating alert:', error);
-      return errorResponse('Failed to update alert');
+      return ApiResponse.error('Failed to update alert');
     }
   }
 
-  static async delete(id: string) {
+  async acknowledge(id: string) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid alert ID format' }]);
-      }
-
-      const deleted = await AlertRepository.delete(id);
-
-      if (!deleted) {
-        return notFoundResponse('Alert not found');
-      }
-
-      return successResponse({ message: 'Alert deleted successfully' });
-    } catch (error) {
-      console.error('Error deleting alert:', error);
-      return errorResponse('Failed to delete alert');
-    }
-  }
-
-  static async acknowledge(id: string) {
-    try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid alert ID format' }]);
-      }
-
-      const alert = await AlertRepository.acknowledge(id);
+      const alert = await this.alertRepository.acknowledge(id);
 
       if (!alert) {
-        return notFoundResponse('Alert not found');
+        return ApiResponse.notFound('Alert not found');
       }
 
-      return successResponse(alert);
+      return ApiResponse.success(alert);
     } catch (error) {
       console.error('Error acknowledging alert:', error);
-      return errorResponse('Failed to acknowledge alert');
+      return ApiResponse.error('Failed to acknowledge alert');
+    }
+  }
+
+  async resolve(id: string) {
+    try {
+      const alert = await this.alertRepository.resolve(id);
+
+      if (!alert) {
+        return ApiResponse.notFound('Alert not found');
+      }
+
+      return ApiResponse.success(alert);
+    } catch (error) {
+      console.error('Error resolving alert:', error);
+      return ApiResponse.error('Failed to resolve alert');
+    }
+  }
+
+  async delete(id: string) {
+    try {
+      const deleted = await this.alertRepository.delete(id);
+
+      if (!deleted) {
+        return ApiResponse.notFound('Alert not found');
+      }
+
+      return ApiResponse.success({ message: 'Alert deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting alert:', error);
+      return ApiResponse.error('Failed to delete alert');
+    }
+  }
+
+  async getStats(request: NextRequest) {
+    try {
+      const { searchParams } = new URL(request.url);
+      const userId = searchParams.get('userId');
+
+      if (!userId) {
+        return ApiResponse.badRequest('userId is required');
+      }
+
+      const [allAlerts, unacknowledged, critical, warning] = await Promise.all([
+        this.alertRepository.findByUserId(userId),
+        this.alertRepository.findUnacknowledged(userId),
+        this.alertRepository.findByType(userId, 'critical'),
+        this.alertRepository.findByType(userId, 'warning'),
+      ]);
+
+      const stats = {
+        total: allAlerts.length,
+        unacknowledged: unacknowledged.length,
+        critical: critical.length,
+        warning: warning.length,
+        acknowledged: allAlerts.filter(a => a.acknowledgedAt).length,
+        resolved: allAlerts.filter(a => a.status === 'resolved').length,
+      };
+
+      return ApiResponse.success(stats);
+    } catch (error) {
+      console.error('Error fetching alert stats:', error);
+      return ApiResponse.error('Failed to fetch alert statistics');
     }
   }
 }
+
+export const alertController = new AlertController();

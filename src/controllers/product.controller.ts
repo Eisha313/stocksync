@@ -1,114 +1,142 @@
 import { NextRequest } from 'next/server';
 import { ProductRepository } from '@/lib/db/repositories';
+import { ApiResponse } from '@/lib/api/response';
 import { validateProduct, validateProductUpdate } from '@/lib/validators/product';
-import { successResponse, errorResponse, notFoundResponse, validationErrorResponse } from '@/lib/api/response';
-import { ObjectId } from 'mongodb';
+import { InventoryMonitorService } from '@/services';
 
 export class ProductController {
-  static async getAll(request: NextRequest) {
+  private productRepository: ProductRepository;
+  private inventoryMonitor: InventoryMonitorService;
+
+  constructor() {
+    this.productRepository = new ProductRepository();
+    this.inventoryMonitor = new InventoryMonitorService();
+  }
+
+  async getAll(request: NextRequest) {
     try {
       const { searchParams } = new URL(request.url);
       const userId = searchParams.get('userId');
-      const lowStock = searchParams.get('lowStock');
+      const lowStock = searchParams.get('lowStock') === 'true';
 
-      let products;
-
-      if (lowStock === 'true' && userId) {
-        products = await ProductRepository.findLowStock(userId);
-      } else if (userId) {
-        products = await ProductRepository.findByUserId(userId);
-      } else {
-        products = await ProductRepository.findAll();
+      if (!userId) {
+        return ApiResponse.badRequest('userId is required');
       }
 
-      return successResponse(products);
+      let products;
+      if (lowStock) {
+        products = await this.productRepository.findLowStock(userId);
+      } else {
+        products = await this.productRepository.findByUserId(userId);
+      }
+
+      return ApiResponse.success(products);
     } catch (error) {
       console.error('Error fetching products:', error);
-      return errorResponse('Failed to fetch products');
+      return ApiResponse.error('Failed to fetch products');
     }
   }
 
-  static async create(request: NextRequest) {
+  async create(request: NextRequest) {
     try {
       const body = await request.json();
       const validation = validateProduct(body);
 
       if (!validation.success) {
-        return validationErrorResponse(validation.error.errors);
+        return ApiResponse.badRequest(validation.error.errors[0].message);
       }
 
-      const product = await ProductRepository.create(validation.data);
-      return successResponse(product, 201);
+      const product = await this.productRepository.create(validation.data);
+      
+      // Check if the new product is already below threshold
+      await this.inventoryMonitor.checkProductThreshold(product);
+
+      return ApiResponse.created(product);
     } catch (error) {
       console.error('Error creating product:', error);
-      return errorResponse('Failed to create product');
+      return ApiResponse.error('Failed to create product');
     }
   }
 
-  static async getById(id: string) {
+  async getById(id: string) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid product ID format' }]);
-      }
-
-      const product = await ProductRepository.findById(id);
+      const product = await this.productRepository.findById(id);
 
       if (!product) {
-        return notFoundResponse('Product not found');
+        return ApiResponse.notFound('Product not found');
       }
 
-      return successResponse(product);
+      return ApiResponse.success(product);
     } catch (error) {
       console.error('Error fetching product:', error);
-      return errorResponse('Failed to fetch product');
+      return ApiResponse.error('Failed to fetch product');
     }
   }
 
-  static async update(id: string, request: NextRequest) {
+  async update(id: string, request: NextRequest) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid product ID format' }]);
-      }
-
       const body = await request.json();
       const validation = validateProductUpdate(body);
 
       if (!validation.success) {
-        return validationErrorResponse(validation.error.errors);
+        return ApiResponse.badRequest(validation.error.errors[0].message);
       }
 
-      const product = await ProductRepository.update(id, {
-        ...validation.data,
-        updatedAt: new Date(),
-      });
+      const product = await this.productRepository.update(id, validation.data);
 
       if (!product) {
-        return notFoundResponse('Product not found');
+        return ApiResponse.notFound('Product not found');
       }
 
-      return successResponse(product);
+      // Check threshold after update
+      await this.inventoryMonitor.checkProductThreshold(product);
+
+      return ApiResponse.success(product);
     } catch (error) {
       console.error('Error updating product:', error);
-      return errorResponse('Failed to update product');
+      return ApiResponse.error('Failed to update product');
     }
   }
 
-  static async delete(id: string) {
+  async updateStock(id: string, request: NextRequest) {
     try {
-      if (!ObjectId.isValid(id)) {
-        return validationErrorResponse([{ message: 'Invalid product ID format' }]);
+      const body = await request.json();
+      const { quantity } = body;
+
+      if (typeof quantity !== 'number') {
+        return ApiResponse.badRequest('quantity must be a number');
       }
 
-      const deleted = await ProductRepository.delete(id);
+      const product = await this.productRepository.updateStock(id, quantity);
+
+      if (!product) {
+        return ApiResponse.notFound('Product not found');
+      }
+
+      // Check threshold after stock update
+      await this.inventoryMonitor.checkProductThreshold(product);
+
+      return ApiResponse.success(product);
+    } catch (error) {
+      console.error('Error updating stock:', error);
+      return ApiResponse.error('Failed to update stock');
+    }
+  }
+
+  async delete(id: string) {
+    try {
+      const deleted = await this.productRepository.delete(id);
 
       if (!deleted) {
-        return notFoundResponse('Product not found');
+        return ApiResponse.notFound('Product not found');
       }
 
-      return successResponse({ message: 'Product deleted successfully' });
+      return ApiResponse.success({ message: 'Product deleted successfully' });
     } catch (error) {
       console.error('Error deleting product:', error);
-      return errorResponse('Failed to delete product');
+      return ApiResponse.error('Failed to delete product');
     }
   }
 }
+
+export const productController = new ProductController();
