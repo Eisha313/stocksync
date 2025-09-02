@@ -1,69 +1,122 @@
-import { MongoClient, MongoClientOptions } from 'mongodb';
+import { MongoClient, MongoClientOptions, Db } from 'mongodb';
 
 if (!process.env.MONGODB_URI) {
-  throw new Error('Please define the MONGODB_URI environment variable inside .env.local');
+  throw new Error('Please add your MongoDB URI to .env.local');
 }
 
 const uri = process.env.MONGODB_URI;
+const dbName = process.env.MONGODB_DB_NAME || 'stocksync';
+
 const options: MongoClientOptions = {
   maxPoolSize: 10,
-  minPoolSize: 5,
-  maxIdleTimeMS: 60000,
+  minPoolSize: 2,
+  maxIdleTimeMS: 30000,
   connectTimeoutMS: 10000,
   socketTimeoutMS: 45000,
+  serverSelectionTimeoutMS: 10000,
   retryWrites: true,
   retryReads: true,
 };
 
-let client: MongoClient;
-let clientPromise: Promise<MongoClient>;
+interface MongoConnection {
+  client: MongoClient;
+  db: Db;
+}
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+let cachedClient: MongoClient | null = null;
+let cachedDb: Db | null = null;
+let connectionPromise: Promise<MongoConnection> | null = null;
 
-async function connectWithRetry(retries = MAX_RETRIES): Promise<MongoClient> {
-  try {
-    const mongoClient = new MongoClient(uri, options);
-    await mongoClient.connect();
-    console.log('Successfully connected to MongoDB');
-    return mongoClient;
-  } catch (error) {
-    if (retries > 0) {
-      console.warn(`MongoDB connection failed, retrying... (${MAX_RETRIES - retries + 1}/${MAX_RETRIES})`);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-      return connectWithRetry(retries - 1);
+async function connectToDatabase(): Promise<MongoConnection> {
+  // Return cached connection if available and connected
+  if (cachedClient && cachedDb) {
+    try {
+      // Verify the connection is still alive
+      await cachedClient.db('admin').command({ ping: 1 });
+      return { client: cachedClient, db: cachedDb };
+    } catch (error) {
+      // Connection lost, clear cache and reconnect
+      console.warn('MongoDB connection lost, reconnecting...');
+      cachedClient = null;
+      cachedDb = null;
+      connectionPromise = null;
     }
-    console.error('Failed to connect to MongoDB after retries:', error);
-    throw error;
+  }
+
+  // Prevent multiple simultaneous connection attempts
+  if (connectionPromise) {
+    return connectionPromise;
+  }
+
+  connectionPromise = (async () => {
+    try {
+      const client = new MongoClient(uri, options);
+      await client.connect();
+      
+      const db = client.db(dbName);
+      
+      // Set up connection event handlers
+      client.on('close', () => {
+        console.warn('MongoDB connection closed');
+        cachedClient = null;
+        cachedDb = null;
+        connectionPromise = null;
+      });
+
+      client.on('error', (error) => {
+        console.error('MongoDB connection error:', error);
+        cachedClient = null;
+        cachedDb = null;
+        connectionPromise = null;
+      });
+
+      cachedClient = client;
+      cachedDb = db;
+
+      console.log('Connected to MongoDB successfully');
+      
+      return { client: cachedClient, db: cachedDb };
+    } catch (error) {
+      connectionPromise = null;
+      throw error;
+    }
+  })();
+
+  return connectionPromise;
+}
+
+export async function getDb(): Promise<Db> {
+  const { db } = await connectToDatabase();
+  return db;
+}
+
+export async function getClient(): Promise<MongoClient> {
+  const { client } = await connectToDatabase();
+  return client;
+}
+
+export async function closeConnection(): Promise<void> {
+  if (cachedClient) {
+    await cachedClient.close();
+    cachedClient = null;
+    cachedDb = null;
+    connectionPromise = null;
+    console.log('MongoDB connection closed gracefully');
   }
 }
 
-declare global {
-  // eslint-disable-next-line no-var
-  var _mongoClientPromise: Promise<MongoClient> | undefined;
+// Handle graceful shutdown
+if (typeof process !== 'undefined') {
+  process.on('SIGINT', async () => {
+    await closeConnection();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    await closeConnection();
+    process.exit(0);
+  });
 }
 
-if (process.env.NODE_ENV === 'development') {
-  // In development mode, use a global variable so that the value
-  // is preserved across module reloads caused by HMR (Hot Module Replacement).
-  if (!global._mongoClientPromise) {
-    global._mongoClientPromise = connectWithRetry();
-  }
-  clientPromise = global._mongoClientPromise;
-} else {
-  // In production mode, it's best to not use a global variable.
-  clientPromise = connectWithRetry();
-}
-
-export async function getDatabase(dbName?: string) {
-  const client = await clientPromise;
-  return client.db(dbName || process.env.MONGODB_DB_NAME || 'stocksync');
-}
-
-export async function closeConnection() {
-  const client = await clientPromise;
-  await client.close();
-  console.log('MongoDB connection closed');
-}
-
-export default clientPromise;
+export { connectToDatabase };
+export default connectToDatabase;

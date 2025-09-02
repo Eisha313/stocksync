@@ -1,157 +1,193 @@
-import { ProductRepository } from '@/lib/db/repositories/product.repository';
-import { AlertRepository } from '@/lib/db/repositories/alert.repository';
-import { Product, Alert, AlertType, AlertStatus } from '@/types';
-import { LOW_STOCK_THRESHOLD, CRITICAL_STOCK_THRESHOLD } from '@/lib/constants';
-import { ObjectId } from 'mongodb';
+import { ProductRepository, AlertRepository, UserRepository } from '@/lib/db/repositories';
+import { NotificationService } from './notification.service';
+import { Alert, AlertStatus, AlertPriority, Product } from '@/types';
+import { ObjectId, WithId } from 'mongodb';
 
-export interface ThresholdConfig {
-  lowStockThreshold: number;
-  criticalStockThreshold: number;
-}
-
-export interface MonitoringResult {
+interface MonitoringResult {
   productsChecked: number;
   alertsCreated: number;
-  lowStockProducts: string[];
-  criticalStockProducts: string[];
+  alertsResolved: number;
+  errors: string[];
 }
 
 export class InventoryMonitorService {
   private productRepository: ProductRepository;
   private alertRepository: AlertRepository;
+  private userRepository: UserRepository;
+  private notificationService: NotificationService;
+  private isRunning: boolean = false;
+  private abortController: AbortController | null = null;
 
   constructor() {
     this.productRepository = new ProductRepository();
     this.alertRepository = new AlertRepository();
+    this.userRepository = new UserRepository();
+    this.notificationService = new NotificationService();
   }
 
-  async checkProductThreshold(
-    product: Product,
-    config: ThresholdConfig = {
-      lowStockThreshold: LOW_STOCK_THRESHOLD,
-      criticalStockThreshold: CRITICAL_STOCK_THRESHOLD,
-    }
-  ): Promise<AlertType | null> {
-    const { quantity, minStockLevel } = product;
-    const effectiveThreshold = minStockLevel || config.lowStockThreshold;
-
-    if (quantity <= config.criticalStockThreshold) {
-      return 'critical';
+  async checkAllProducts(): Promise<MonitoringResult> {
+    if (this.isRunning) {
+      return {
+        productsChecked: 0,
+        alertsCreated: 0,
+        alertsResolved: 0,
+        errors: ['Monitoring is already running'],
+      };
     }
 
-    if (quantity <= effectiveThreshold) {
-      return 'low_stock';
-    }
+    this.isRunning = true;
+    this.abortController = new AbortController();
 
-    return null;
-  }
-
-  async createAlertForProduct(
-    product: Product,
-    alertType: AlertType,
-    userId: string
-  ): Promise<Alert | null> {
-    // Check if there's already an active alert for this product
-    const existingAlerts = await this.alertRepository.findByProductId(
-      product._id!.toString()
-    );
-
-    const hasActiveAlert = existingAlerts.some(
-      (alert) =>
-        alert.status === 'pending' &&
-        alert.type === alertType
-    );
-
-    if (hasActiveAlert) {
-      return null;
-    }
-
-    const alertData: Omit<Alert, '_id' | 'createdAt' | 'updatedAt'> = {
-      userId: new ObjectId(userId),
-      productId: product._id!,
-      type: alertType,
-      status: 'pending' as AlertStatus,
-      message: this.generateAlertMessage(product, alertType),
-      threshold: product.minStockLevel || LOW_STOCK_THRESHOLD,
-      currentStock: product.quantity,
-    };
-
-    return this.alertRepository.create(alertData);
-  }
-
-  private generateAlertMessage(product: Product, alertType: AlertType): string {
-    switch (alertType) {
-      case 'critical':
-        return `CRITICAL: ${product.name} is almost out of stock! Current quantity: ${product.quantity}`;
-      case 'low_stock':
-        return `Low Stock Alert: ${product.name} is running low. Current quantity: ${product.quantity}`;
-      case 'out_of_stock':
-        return `OUT OF STOCK: ${product.name} has no remaining inventory!`;
-      case 'restock':
-        return `Restock Reminder: ${product.name} needs to be restocked soon.`;
-      default:
-        return `Inventory alert for ${product.name}. Current quantity: ${product.quantity}`;
-    }
-  }
-
-  async monitorUserInventory(
-    userId: string,
-    config?: ThresholdConfig
-  ): Promise<MonitoringResult> {
-    const products = await this.productRepository.findByUserId(userId);
-    
     const result: MonitoringResult = {
-      productsChecked: products.length,
+      productsChecked: 0,
+      alertsResolved: 0,
       alertsCreated: 0,
-      lowStockProducts: [],
-      criticalStockProducts: [],
+      errors: [],
     };
 
-    for (const product of products) {
-      if (!product.isActive) continue;
+    try {
+      const products = await this.productRepository.findMany({});
+      result.productsChecked = products.length;
 
-      const alertType = await this.checkProductThreshold(product, config);
-
-      if (alertType) {
-        const alert = await this.createAlertForProduct(product, alertType, userId);
-
-        if (alert) {
-          result.alertsCreated++;
+      // Process products in batches to prevent memory issues
+      const batchSize = 50;
+      for (let i = 0; i < products.length; i += batchSize) {
+        if (this.abortController?.signal.aborted) {
+          result.errors.push('Monitoring was aborted');
+          break;
         }
 
-        if (alertType === 'critical') {
-          result.criticalStockProducts.push(product.name);
-        } else if (alertType === 'low_stock') {
-          result.lowStockProducts.push(product.name);
+        const batch = products.slice(i, i + batchSize);
+        const batchResults = await Promise.allSettled(
+          batch.map((product) => this.checkProduct(product))
+        );
+
+        for (const batchResult of batchResults) {
+          if (batchResult.status === 'fulfilled') {
+            result.alertsCreated += batchResult.value.alertsCreated;
+            result.alertsResolved += batchResult.value.alertsResolved;
+          } else {
+            result.errors.push(batchResult.reason?.message || 'Unknown error');
+          }
         }
       }
-    }
 
-    return result;
+      return result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      result.errors.push(errorMessage);
+      return result;
+    } finally {
+      this.isRunning = false;
+      this.abortController = null;
+    }
   }
 
-  async getProductsNeedingRestock(userId: string): Promise<Product[]> {
-    const products = await this.productRepository.findByUserId(userId);
-    
-    return products.filter((product) => {
-      if (!product.isActive) return false;
-      const threshold = product.minStockLevel || LOW_STOCK_THRESHOLD;
-      return product.quantity <= threshold;
+  stopMonitoring(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+  }
+
+  private async checkProduct(
+    product: WithId<Product>
+  ): Promise<{ alertsCreated: number; alertsResolved: number }> {
+    let alertsCreated = 0;
+    let alertsResolved = 0;
+
+    const isLowStock = product.quantity <= product.lowStockThreshold;
+    const isCriticalStock = product.quantity <= product.criticalStockThreshold;
+
+    const existingAlert = await this.alertRepository.findOne({
+      productId: product._id,
+      status: { $in: [AlertStatus.PENDING, AlertStatus.SENT] },
+    });
+
+    if (isLowStock || isCriticalStock) {
+      const priority = isCriticalStock ? AlertPriority.CRITICAL : AlertPriority.HIGH;
+
+      if (!existingAlert) {
+        await this.createAlert(product, priority);
+        alertsCreated++;
+      } else if (existingAlert.priority !== priority) {
+        await this.alertRepository.updateById(existingAlert._id, {
+          priority,
+          message: this.generateAlertMessage(product, priority),
+        });
+      }
+    } else if (existingAlert) {
+      await this.alertRepository.updateById(existingAlert._id, {
+        status: AlertStatus.RESOLVED,
+        resolvedAt: new Date(),
+      });
+      alertsResolved++;
+    }
+
+    return { alertsCreated, alertsResolved };
+  }
+
+  private async createAlert(product: WithId<Product>, priority: AlertPriority): Promise<void> {
+    const alert = await this.alertRepository.create({
+      productId: product._id,
+      userId: product.userId,
+      type: 'low_stock',
+      priority,
+      status: AlertStatus.PENDING,
+      message: this.generateAlertMessage(product, priority),
+      threshold: priority === AlertPriority.CRITICAL
+        ? product.criticalStockThreshold
+        : product.lowStockThreshold,
+      currentQuantity: product.quantity,
+    } as Alert);
+
+    // Send notifications asynchronously - don't block
+    this.sendAlertNotifications(alert as WithId<Alert>, product).catch((error) => {
+      console.error('Failed to send alert notifications:', error);
     });
   }
 
-  async resolveAlertsForProduct(productId: string): Promise<number> {
-    const alerts = await this.alertRepository.findByProductId(productId);
-    let resolvedCount = 0;
+  private async sendAlertNotifications(
+    alert: WithId<Alert>,
+    product: WithId<Product>
+  ): Promise<void> {
+    const user = await this.userRepository.findById(product.userId);
+    if (!user) return;
 
-    for (const alert of alerts) {
-      if (alert.status === 'pending') {
-        await this.alertRepository.updateStatus(alert._id!.toString(), 'resolved');
-        resolvedCount++;
-      }
+    // Send email notification
+    await this.notificationService.sendEmail({
+      to: user.email,
+      subject: `Stock Alert: ${product.name}`,
+      body: alert.message,
+    });
+
+    // Send SMS if user has premium and phone number
+    if (user.isPremium && user.phone) {
+      await this.notificationService.sendSMS({
+        to: user.phone,
+        message: `StockSync Alert: ${product.name} is running low (${product.quantity} remaining)`,
+      });
     }
 
-    return resolvedCount;
+    await this.alertRepository.updateById(alert._id, {
+      status: AlertStatus.SENT,
+      sentAt: new Date(),
+    });
+  }
+
+  private generateAlertMessage(product: WithId<Product>, priority: AlertPriority): string {
+    const severityText = priority === AlertPriority.CRITICAL ? 'CRITICAL' : 'Low';
+    return `${severityText} stock alert for "${product.name}": Only ${product.quantity} units remaining (threshold: ${priority === AlertPriority.CRITICAL ? product.criticalStockThreshold : product.lowStockThreshold})`;
+  }
+
+  async checkSingleProduct(productId: string | ObjectId): Promise<void> {
+    const product = await this.productRepository.findById(productId);
+    if (product) {
+      await this.checkProduct(product);
+    }
+  }
+
+  async getMonitoringStatus(): Promise<{ isRunning: boolean }> {
+    return { isRunning: this.isRunning };
   }
 }
 
