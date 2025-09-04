@@ -1,87 +1,128 @@
-import { ObjectId, Filter, UpdateFilter } from 'mongodb';
 import { BaseRepository } from './base';
-import { Alert, AlertSeverity, AlertStatus } from '@/types';
-import { COLLECTIONS } from '../collections';
+import { Alert } from '@/types';
+import { getCollection, COLLECTIONS } from '../collections';
+import { ObjectId, WithId, Document } from 'mongodb';
 
-export class AlertRepository extends BaseRepository<Alert> {
+class AlertRepositoryClass extends BaseRepository<Alert> {
   constructor() {
     super(COLLECTIONS.ALERTS);
   }
 
   async findByProductId(productId: string): Promise<Alert[]> {
-    return this.findMany({ productId } as Filter<Alert>);
+    const collection = await getCollection<Alert>(this.collectionName);
+    const documents = await collection
+      .find({ productId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    return documents.map(this.mapDocument);
   }
 
-  async findByUserId(userId: string): Promise<Alert[]> {
-    return this.findMany({ userId } as Filter<Alert>);
+  async findUnacknowledged(): Promise<Alert[]> {
+    const collection = await getCollection<Alert>(this.collectionName);
+    const documents = await collection
+      .find({ acknowledged: false })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    return documents.map(this.mapDocument);
   }
 
-  async findActiveAlerts(userId: string): Promise<Alert[]> {
-    return this.findMany({
-      userId,
-      status: AlertStatus.ACTIVE,
-    } as Filter<Alert>);
+  async findBySeverity(severity: string): Promise<Alert[]> {
+    const collection = await getCollection<Alert>(this.collectionName);
+    const documents = await collection
+      .find({ severity })
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    return documents.map(this.mapDocument);
   }
 
-  async findBySeverity(userId: string, severity: AlertSeverity): Promise<Alert[]> {
-    return this.findMany({
-      userId,
-      severity,
-    } as Filter<Alert>);
-  }
+  async acknowledge(alertId: string, userId: string): Promise<Alert | null> {
+    if (!ObjectId.isValid(alertId)) {
+      throw new Error('Invalid alert ID format');
+    }
 
-  async acknowledgeAlert(id: string): Promise<Alert | null> {
-    return this.updateOne(id, {
-      $set: {
-        status: AlertStatus.ACKNOWLEDGED,
-        acknowledgedAt: new Date(),
-        updatedAt: new Date(),
+    const collection = await getCollection<Alert>(this.collectionName);
+    
+    // Use findOneAndUpdate with proper options to prevent race conditions
+    const result = await collection.findOneAndUpdate(
+      { 
+        _id: new ObjectId(alertId),
+        acknowledged: false // Only update if not already acknowledged
       },
-    } as UpdateFilter<Alert>);
-  }
-
-  async resolveAlert(id: string): Promise<Alert | null> {
-    return this.updateOne(id, {
-      $set: {
-        status: AlertStatus.RESOLVED,
-        resolvedAt: new Date(),
-        updatedAt: new Date(),
+      { 
+        $set: { 
+          acknowledged: true,
+          acknowledgedAt: new Date(),
+          acknowledgedBy: userId,
+          updatedAt: new Date(),
+        } 
       },
-    } as UpdateFilter<Alert>);
-  }
+      { 
+        returnDocument: 'after'
+      }
+    );
 
-  async dismissAlert(id: string): Promise<Alert | null> {
-    return this.updateOne(id, {
-      $set: {
-        status: AlertStatus.DISMISSED,
-        updatedAt: new Date(),
-      },
-    } as UpdateFilter<Alert>);
-  }
+    if (!result) {
+      // Check if alert exists but was already acknowledged
+      const existingAlert = await collection.findOne({ _id: new ObjectId(alertId) });
+      if (existingAlert && existingAlert.acknowledged) {
+        return this.mapDocument(existingAlert as WithId<Document> & Alert);
+      }
+      return null;
+    }
 
-  async createAlert(data: Omit<Alert, '_id' | 'createdAt' | 'updatedAt'>): Promise<Alert> {
-    const now = new Date();
-    const alertData: Omit<Alert, '_id'> = {
-      ...data,
-      status: AlertStatus.ACTIVE,
-      createdAt: now,
-      updatedAt: now,
-    };
-    return this.create(alertData);
-  }
-
-  async countActiveAlerts(userId: string): Promise<number> {
-    return this.count({
-      userId,
-      status: AlertStatus.ACTIVE,
-    } as Filter<Alert>);
+    return this.mapDocument(result as WithId<Document> & Alert);
   }
 
   async deleteByProductId(productId: string): Promise<number> {
-    const collection = await this.getCollection();
-    const result = await collection.deleteMany({ productId } as Filter<Alert>);
+    const collection = await getCollection<Alert>(this.collectionName);
+    const result = await collection.deleteMany({ productId });
     return result.deletedCount;
+  }
+
+  async findRecent(limit: number = 50): Promise<Alert[]> {
+    const collection = await getCollection<Alert>(this.collectionName);
+    const documents = await collection
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+    
+    return documents.map(this.mapDocument);
+  }
+
+  async countBySeverity(): Promise<Record<string, number>> {
+    const collection = await getCollection<Alert>(this.collectionName);
+    const pipeline = [
+      { $match: { acknowledged: false } },
+      { $group: { _id: '$severity', count: { $sum: 1 } } }
+    ];
+    
+    const results = await collection.aggregate(pipeline).toArray();
+    
+    const counts: Record<string, number> = {
+      critical: 0,
+      warning: 0,
+      low: 0,
+    };
+
+    for (const result of results) {
+      if (result._id && typeof result._id === 'string') {
+        counts[result._id] = result.count;
+      }
+    }
+
+    return counts;
+  }
+
+  private mapDocument(doc: WithId<Document> & Alert): Alert {
+    return {
+      ...doc,
+      _id: doc._id,
+    } as Alert;
   }
 }
 
-export const alertRepository = new AlertRepository();
+export const AlertRepository = new AlertRepositoryClass();

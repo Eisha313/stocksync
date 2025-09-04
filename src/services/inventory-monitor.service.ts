@@ -1,194 +1,176 @@
 import { ProductRepository, AlertRepository, UserRepository } from '@/lib/db/repositories';
 import { NotificationService } from './notification.service';
-import { Alert, AlertStatus, AlertPriority, Product } from '@/types';
-import { ObjectId, WithId } from 'mongodb';
-
-interface MonitoringResult {
-  productsChecked: number;
-  alertsCreated: number;
-  alertsResolved: number;
-  errors: string[];
-}
+import { Product, Alert, AlertSeverity } from '@/types';
+import { ALERT_THRESHOLDS } from '@/lib/constants';
 
 export class InventoryMonitorService {
-  private productRepository: ProductRepository;
-  private alertRepository: AlertRepository;
-  private userRepository: UserRepository;
+  private static instance: InventoryMonitorService;
+  private isProcessing: boolean = false;
+  private processingQueue: string[] = [];
   private notificationService: NotificationService;
-  private isRunning: boolean = false;
-  private abortController: AbortController | null = null;
 
-  constructor() {
-    this.productRepository = new ProductRepository();
-    this.alertRepository = new AlertRepository();
-    this.userRepository = new UserRepository();
-    this.notificationService = new NotificationService();
+  private constructor() {
+    this.notificationService = NotificationService.getInstance();
   }
 
-  async checkAllProducts(): Promise<MonitoringResult> {
-    if (this.isRunning) {
-      return {
-        productsChecked: 0,
-        alertsCreated: 0,
-        alertsResolved: 0,
-        errors: ['Monitoring is already running'],
-      };
+  static getInstance(): InventoryMonitorService {
+    if (!InventoryMonitorService.instance) {
+      InventoryMonitorService.instance = new InventoryMonitorService();
+    }
+    return InventoryMonitorService.instance;
+  }
+
+  async checkAllProducts(): Promise<Alert[]> {
+    const products = await ProductRepository.findAll();
+    const alerts: Alert[] = [];
+
+    for (const product of products) {
+      try {
+        const productAlerts = await this.checkProduct(product);
+        alerts.push(...productAlerts);
+      } catch (error) {
+        console.error(`Error checking product ${product._id}:`, error);
+        // Continue processing other products even if one fails
+      }
     }
 
-    this.isRunning = true;
-    this.abortController = new AbortController();
+    return alerts;
+  }
 
-    const result: MonitoringResult = {
-      productsChecked: 0,
-      alertsResolved: 0,
-      alertsCreated: 0,
-      errors: [],
-    };
+  async checkProduct(product: Product): Promise<Alert[]> {
+    const productId = product._id?.toString();
+    
+    if (!productId) {
+      throw new Error('Product ID is required');
+    }
+
+    // Prevent race condition by tracking products being processed
+    if (this.processingQueue.includes(productId)) {
+      console.log(`Product ${productId} is already being processed, skipping`);
+      return [];
+    }
+
+    this.processingQueue.push(productId);
 
     try {
-      const products = await this.productRepository.findMany({});
-      result.productsChecked = products.length;
+      const alerts: Alert[] = [];
+      const severity = this.calculateSeverity(product.quantity, product.threshold);
 
-      // Process products in batches to prevent memory issues
-      const batchSize = 50;
-      for (let i = 0; i < products.length; i += batchSize) {
-        if (this.abortController?.signal.aborted) {
-          result.errors.push('Monitoring was aborted');
-          break;
-        }
-
-        const batch = products.slice(i, i + batchSize);
-        const batchResults = await Promise.allSettled(
-          batch.map((product) => this.checkProduct(product))
+      if (severity) {
+        // Check for existing active alert to prevent duplicates
+        const existingAlerts = await AlertRepository.findByProductId(productId);
+        const hasActiveAlert = existingAlerts.some(
+          (alert) => !alert.acknowledged && alert.severity === severity
         );
 
-        for (const batchResult of batchResults) {
-          if (batchResult.status === 'fulfilled') {
-            result.alertsCreated += batchResult.value.alertsCreated;
-            result.alertsResolved += batchResult.value.alertsResolved;
-          } else {
-            result.errors.push(batchResult.reason?.message || 'Unknown error');
+        if (!hasActiveAlert) {
+          const alert = await this.createAlert(product, severity);
+          if (alert) {
+            alerts.push(alert);
+            await this.notifyUsers(product, alert);
           }
         }
       }
 
-      return result;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      result.errors.push(errorMessage);
-      return result;
+      return alerts;
     } finally {
-      this.isRunning = false;
-      this.abortController = null;
-    }
-  }
-
-  stopMonitoring(): void {
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-  }
-
-  private async checkProduct(
-    product: WithId<Product>
-  ): Promise<{ alertsCreated: number; alertsResolved: number }> {
-    let alertsCreated = 0;
-    let alertsResolved = 0;
-
-    const isLowStock = product.quantity <= product.lowStockThreshold;
-    const isCriticalStock = product.quantity <= product.criticalStockThreshold;
-
-    const existingAlert = await this.alertRepository.findOne({
-      productId: product._id,
-      status: { $in: [AlertStatus.PENDING, AlertStatus.SENT] },
-    });
-
-    if (isLowStock || isCriticalStock) {
-      const priority = isCriticalStock ? AlertPriority.CRITICAL : AlertPriority.HIGH;
-
-      if (!existingAlert) {
-        await this.createAlert(product, priority);
-        alertsCreated++;
-      } else if (existingAlert.priority !== priority) {
-        await this.alertRepository.updateById(existingAlert._id, {
-          priority,
-          message: this.generateAlertMessage(product, priority),
-        });
+      // Always remove from processing queue
+      const index = this.processingQueue.indexOf(productId);
+      if (index > -1) {
+        this.processingQueue.splice(index, 1);
       }
-    } else if (existingAlert) {
-      await this.alertRepository.updateById(existingAlert._id, {
-        status: AlertStatus.RESOLVED,
-        resolvedAt: new Date(),
-      });
-      alertsResolved++;
     }
-
-    return { alertsCreated, alertsResolved };
   }
 
-  private async createAlert(product: WithId<Product>, priority: AlertPriority): Promise<void> {
-    const alert = await this.alertRepository.create({
-      productId: product._id,
-      userId: product.userId,
-      type: 'low_stock',
-      priority,
-      status: AlertStatus.PENDING,
-      message: this.generateAlertMessage(product, priority),
-      threshold: priority === AlertPriority.CRITICAL
-        ? product.criticalStockThreshold
-        : product.lowStockThreshold,
+  private calculateSeverity(quantity: number, threshold: number): AlertSeverity | null {
+    if (quantity <= 0) {
+      return 'critical';
+    }
+    
+    const percentage = (quantity / threshold) * 100;
+
+    if (percentage <= ALERT_THRESHOLDS.CRITICAL) {
+      return 'critical';
+    } else if (percentage <= ALERT_THRESHOLDS.WARNING) {
+      return 'warning';
+    } else if (percentage <= ALERT_THRESHOLDS.LOW) {
+      return 'low';
+    }
+
+    return null;
+  }
+
+  private async createAlert(product: Product, severity: AlertSeverity): Promise<Alert | null> {
+    if (!product._id) {
+      console.error('Cannot create alert: Product ID is missing');
+      return null;
+    }
+
+    const alertData = {
+      productId: product._id.toString(),
+      productName: product.name,
       currentQuantity: product.quantity,
-    } as Alert);
+      threshold: product.threshold,
+      severity,
+      message: this.generateAlertMessage(product, severity),
+      acknowledged: false,
+      createdAt: new Date(),
+    };
 
-    // Send notifications asynchronously - don't block
-    this.sendAlertNotifications(alert as WithId<Alert>, product).catch((error) => {
-      console.error('Failed to send alert notifications:', error);
-    });
+    try {
+      const alert = await AlertRepository.create(alertData);
+      return alert;
+    } catch (error) {
+      console.error('Failed to create alert:', error);
+      return null;
+    }
   }
 
-  private async sendAlertNotifications(
-    alert: WithId<Alert>,
-    product: WithId<Product>
-  ): Promise<void> {
-    const user = await this.userRepository.findById(product.userId);
-    if (!user) return;
+  private generateAlertMessage(product: Product, severity: AlertSeverity): string {
+    const messages: Record<AlertSeverity, string> = {
+      critical: `CRITICAL: ${product.name} is out of stock or critically low (${product.quantity} remaining)`,
+      warning: `WARNING: ${product.name} stock is running low (${product.quantity}/${product.threshold})`,
+      low: `LOW: ${product.name} is approaching threshold (${product.quantity}/${product.threshold})`,
+    };
 
-    // Send email notification
-    await this.notificationService.sendEmail({
-      to: user.email,
-      subject: `Stock Alert: ${product.name}`,
-      body: alert.message,
-    });
+    return messages[severity];
+  }
 
-    // Send SMS if user has premium and phone number
-    if (user.isPremium && user.phone) {
-      await this.notificationService.sendSMS({
-        to: user.phone,
-        message: `StockSync Alert: ${product.name} is running low (${product.quantity} remaining)`,
+  private async notifyUsers(product: Product, alert: Alert): Promise<void> {
+    try {
+      const users = await UserRepository.findByNotificationPreference(alert.severity);
+
+      const notificationPromises = users.map(async (user) => {
+        try {
+          await this.notificationService.sendAlert(user, alert);
+        } catch (error) {
+          console.error(`Failed to notify user ${user._id}:`, error);
+          // Don't throw - continue notifying other users
+        }
       });
-    }
 
-    await this.alertRepository.updateById(alert._id, {
-      status: AlertStatus.SENT,
-      sentAt: new Date(),
-    });
-  }
-
-  private generateAlertMessage(product: WithId<Product>, priority: AlertPriority): string {
-    const severityText = priority === AlertPriority.CRITICAL ? 'CRITICAL' : 'Low';
-    return `${severityText} stock alert for "${product.name}": Only ${product.quantity} units remaining (threshold: ${priority === AlertPriority.CRITICAL ? product.criticalStockThreshold : product.lowStockThreshold})`;
-  }
-
-  async checkSingleProduct(productId: string | ObjectId): Promise<void> {
-    const product = await this.productRepository.findById(productId);
-    if (product) {
-      await this.checkProduct(product);
+      await Promise.allSettled(notificationPromises);
+    } catch (error) {
+      console.error('Error fetching users for notification:', error);
     }
   }
 
-  async getMonitoringStatus(): Promise<{ isRunning: boolean }> {
-    return { isRunning: this.isRunning };
+  async acknowledgeAlert(alertId: string, userId: string): Promise<Alert | null> {
+    try {
+      const alert = await AlertRepository.acknowledge(alertId, userId);
+      return alert;
+    } catch (error) {
+      console.error(`Failed to acknowledge alert ${alertId}:`, error);
+      throw error;
+    }
+  }
+
+  getProcessingStatus(): { isProcessing: boolean; queueLength: number } {
+    return {
+      isProcessing: this.processingQueue.length > 0,
+      queueLength: this.processingQueue.length,
+    };
   }
 }
 
-export const inventoryMonitorService = new InventoryMonitorService();
+export const inventoryMonitorService = InventoryMonitorService.getInstance();
