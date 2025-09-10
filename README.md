@@ -1,32 +1,30 @@
-# StockSync
+# StockSync 📦
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
 
 A lightweight inventory alert system that notifies store owners when products run low.
 
-## Features
+## ✨ Features
 
-- 📊 **Real-time Inventory Monitoring** - Customizable threshold alerts for low stock detection
-- 📦 **Product Catalog Management** - Simple product tracking with stock quantities stored in MongoDB
-- 💳 **Premium Features** - Stripe-powered one-time payment for SMS notifications and advanced alerts
+- **🔔 Real-time Monitoring** - Customizable alert levels for inventory thresholds
+- **📦 Product Catalog** - Simple stock quantity tracking with MongoDB storage
+- **💳 Premium Features** - Stripe-powered one-time payment for SMS notifications
+- **📧 Multi-channel Alerts** - Email and SMS notification support
+- **🔌 RESTful API** - Clean, documented API for integrations
 
-## Quick Start
-
-### Prerequisites
-
-- Node.js 18+
-- MongoDB (local or Atlas)
-- Stripe account
-
-### Installation
+## 🚀 Quick Start
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/stocksync.git
+git clone https://github.com/your-org/stocksync.git
 cd stocksync
 
 # Install dependencies
 npm install
 
-# Setup environment
+# Set up environment variables
 cp .env.example .env.local
 # Edit .env.local with your configuration
 
@@ -34,74 +32,90 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Visit `http://localhost:3000` to access the application.
+Open [http://localhost:3000](http://localhost:3000) to view the application.
 
-## Documentation
+## 📚 Documentation
 
-- [API Documentation](./docs/API.md) - Complete API reference
-- [Architecture Guide](./docs/ARCHITECTURE.md) - System design and patterns
-- [Deployment Guide](./docs/DEPLOYMENT.md) - Production deployment instructions
-- [Environment Setup](./docs/ENVIRONMENT.md) - Development environment configuration
-- [Contributing Guide](./CONTRIBUTING.md) - How to contribute to the project
+| Document | Description |
+|----------|-------------|
+| [Getting Started](./docs/GETTING_STARTED.md) | Initial setup and first steps |
+| [User Guide](./docs/USER_GUIDE.md) | How to use StockSync |
+| [API Reference](./docs/API.md) | Complete API documentation |
+| [Architecture](./docs/ARCHITECTURE.md) | System design overview |
+| [Deployment](./docs/DEPLOYMENT.md) | Production deployment guide |
+| [Environment](./docs/ENVIRONMENT.md) | Configuration reference |
+| [Troubleshooting](./docs/TROUBLESHOOTING.md) | Common issues and solutions |
+| [FAQ](./docs/FAQ.md) | Frequently asked questions |
+| [Contributing](./CONTRIBUTING.md) | How to contribute |
 
-## Environment Variables
+## 🏗️ Tech Stack
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `MONGODB_URI` | Yes | MongoDB connection string |
-| `STRIPE_SECRET_KEY` | Yes | Stripe secret API key |
-| `STRIPE_PUBLISHABLE_KEY` | Yes | Stripe publishable key |
-| `STRIPE_WEBHOOK_SECRET` | Yes | Stripe webhook signing secret |
-| `NEXT_PUBLIC_APP_URL` | Yes | Application base URL |
-| `TWILIO_ACCOUNT_SID` | No | Twilio SID for SMS |
-| `TWILIO_AUTH_TOKEN` | No | Twilio auth token |
-| `TWILIO_PHONE_NUMBER` | No | Twilio sender number |
+- **Framework**: [Next.js 14](https://nextjs.org/) with App Router
+- **Language**: [TypeScript](https://www.typescriptlang.org/)
+- **Database**: [MongoDB](https://www.mongodb.com/)
+- **Payments**: [Stripe](https://stripe.com/)
+- **Validation**: [Zod](https://zod.dev/)
 
-See [Environment Setup](./docs/ENVIRONMENT.md) for complete configuration guide.
-
-## Project Structure
+## 📁 Project Structure
 
 ```
-src/
-├── app/                  # Next.js App Router
-│   ├── api/             # API routes
-│   └── layout.tsx       # Root layout
-├── controllers/         # Request handlers
-├── services/            # Business logic
-├── models/              # MongoDB models
-├── lib/
-│   ├── db/             # Database utilities
-│   ├── middleware/     # API middleware
-│   ├── utils/          # Helper functions
-│   └── validators/     # Zod schemas
-└── types/              # TypeScript definitions
+stocksync/
+├── src/
+│   ├── app/              # Next.js App Router
+│   │   └── api/          # API routes
+│   ├── controllers/      # Request handlers
+│   ├── services/         # Business logic
+│   ├── models/           # Data models
+│   ├── lib/              # Utilities & config
+│   │   ├── db/           # Database layer
+│   │   ├── middleware/   # API middleware
+│   │   ├── validators/   # Zod schemas
+│   │   └── utils/        # Helper functions
+│   └── types/            # TypeScript types
+├── docs/                 # Documentation
+└── package.json
 ```
 
-## API Overview
+## 🔧 Configuration
+
+Create a `.env.local` file with the following variables:
+
+```env
+# Database
+MONGODB_URI=mongodb://localhost:27017/stocksync
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+See [Environment Documentation](./docs/ENVIRONMENT.md) for all options.
+
+## 📡 API Overview
 
 ### Products
-
 ```
 GET    /api/products          # List all products
-POST   /api/products          # Create product
-GET    /api/products/:id      # Get product
-PUT    /api/products/:id      # Update product
-DELETE /api/products/:id      # Delete product
+POST   /api/products          # Create a product
+GET    /api/products/:id      # Get a product
+PUT    /api/products/:id      # Update a product
+DELETE /api/products/:id      # Delete a product
 ```
 
 ### Alerts
-
 ```
-GET    /api/alerts            # List alerts
-POST   /api/alerts            # Create alert config
-GET    /api/alerts/:id        # Get alert
-PUT    /api/alerts/:id        # Update alert
-DELETE /api/alerts/:id        # Delete alert
+GET    /api/alerts            # List all alerts
+POST   /api/alerts            # Create an alert
+GET    /api/alerts/:id        # Get an alert
+PUT    /api/alerts/:id        # Update an alert
 POST   /api/alerts/:id/acknowledge  # Acknowledge alert
 ```
 
 ### Payments
-
 ```
 POST   /api/payments/checkout # Create checkout session
 POST   /api/webhooks/stripe   # Stripe webhook handler
@@ -109,17 +123,17 @@ POST   /api/webhooks/stripe   # Stripe webhook handler
 
 See [API Documentation](./docs/API.md) for complete details.
 
-## Development
+## 🧪 Development
 
 ```bash
 # Run development server
 npm run dev
 
-# Run linter
-npm run lint
-
-# Type check
+# Type checking
 npm run type-check
+
+# Linting
+npm run lint
 
 # Build for production
 npm run build
@@ -128,33 +142,44 @@ npm run build
 npm start
 ```
 
-## Deployment
+## 🚢 Deployment
 
-### Vercel (Recommended)
+StockSync can be deployed to:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/stocksync)
-
-### Docker
-
-```bash
-docker-compose up -d
-```
+- **Vercel** (recommended)
+- **Railway**
+- **Docker**
+- **Any Node.js hosting**
 
 See [Deployment Guide](./docs/DEPLOYMENT.md) for detailed instructions.
 
-## Tech Stack
-
-- **Framework**: Next.js 14 (App Router)
-- **Language**: TypeScript
-- **Database**: MongoDB with native driver
-- **Payments**: Stripe
-- **Notifications**: Twilio (SMS)
-- **Validation**: Zod
-
-## Contributing
+## 🤝 Contributing
 
 We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details.
 
-## License
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit changes: `git commit -m 'feat: add amazing feature'`
+4. Push to branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
 
-MIT License - see [LICENSE](./LICENSE) for details.
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [Next.js](https://nextjs.org/) for the amazing framework
+- [Vercel](https://vercel.com/) for hosting and deployment
+- [MongoDB](https://www.mongodb.com/) for the database
+- [Stripe](https://stripe.com/) for payment processing
+
+## 📞 Support
+
+- 📖 [Documentation](./docs/INDEX.md)
+- 🐛 [Issue Tracker](https://github.com/your-org/stocksync/issues)
+- 💬 [Discussions](https://github.com/your-org/stocksync/discussions)
+
+---
+
+**StockSync** - Never run out of stock again! 📦✨
